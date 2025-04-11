@@ -1,7 +1,5 @@
 import os
 import random
-# 设置CUDA_VISIBLE_DEVICES环境变量为卡2
-
 import argparse
 from PIL import Image, ImageDraw
 from omegaconf import OmegaConf
