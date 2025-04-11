@@ -30,7 +30,7 @@ clip_text_feature_dict = dict()
 
 
 def load_clip_text_cache(device):
-    clip_text_feature_dict = torch.load('/home/wwx/paper1/interactdiffusion-main_489/DATA/clip_phrases_feature_cache.pth', map_location=device)
+    clip_text_feature_dict = torch.load('DATA/clip_phrases_feature_cache.pth', map_location=device)
     return clip_text_feature_dict
 
 
@@ -259,55 +259,31 @@ def crop_and_resize(image):
     image = TF.center_crop(image, crop_size)
     image = image.resize((512, 512))
     return image
-# def get_between_box(bbox1, bbox2):
-#     """ Between Set Operation
-#     Operation of Box A between Box B from Prof. Jiang idea
-#     """
-#     all_x = torch.cat([bbox1[:, 0::2], bbox2[:, 0::2]], dim=-1)
-#     all_y = torch.cat([bbox1[:, 1::2], bbox2[:, 1::2]], dim=-1)
-#     all_x, _ = all_x.sort()
-#     all_y, _ = all_y.sort()
-#     return torch.stack([all_x[:, 1], all_y[:, 1], all_x[:, 2], all_y[:, 2]], dim=-1)
-        #return torch.stack([all_x[:, 1], all_y[:, 1], all_x[:, 2], all_y[:, 2]], dim=-1)
 
 def get_between_box(bbox1, bbox2):
-    """ Between Set Operation with scaling
-    Args:
-        bbox1: [B, N, 4] tensor (x1,y1,x2,y2) in normalized coordinates
-        bbox2: [B, N, 4] tensor (x1,y1,x2,y2) in normalized coordinates
-        alpha: scaling factor for side lengths (1.0 means no scaling)
-    Returns:
-        [B, N, 4] tensor of scaled intermediate boxes
-    """
-    # 合并并排序坐标
     alpha=1.2
     all_x = torch.cat([bbox1[:, 0::2], bbox2[:, 0::2]], dim=-1)  # [B, N, 4]
     all_y = torch.cat([bbox1[:, 1::2], bbox2[:, 1::2]], dim=-1)  # [B, N, 4]
     all_x, _ = all_x.sort(dim=-1)
     all_y, _ = all_y.sort(dim=-1)
 
-    # 原始中间框坐标
     x1 = all_x[:, 1]
     y1 = all_y[:, 1]
     x2 = all_x[:, 2]
     y2 = all_y[:, 2]
 
-    # 计算缩放后的边界框
     center_x = (x1 + x2) / 2
     center_y = (y1 + y2) / 2
     width = (x2 - x1) * alpha
     height = (y2 - y1) * alpha
 
-    # 新坐标（自动保持原始维度）
     new_x1 = torch.clamp(center_x - width/2, 0.0, 1.0)
     new_y1 = torch.clamp(center_y - height/2, 0.0, 1.0)
     new_x2 = torch.clamp(center_x + width/2, 0.0, 1.0)
     new_y2 = torch.clamp(center_y + height/2, 0.0, 1.0)
 
-    # 保持原始输出维度 [B, N, 4]
     return torch.stack([new_x1, new_y1, new_x2, new_y2], dim=-1)
 
-#     return scaled_bbox
 def create_guidance_masks(bboxes, height, width):
     guidance_masks = []
     in_box = []
@@ -332,17 +308,14 @@ def prepare_masks(meta, height, width, device):
     subject_boxes = torch.tensor(meta['subject_boxes'], dtype=torch.float16, device=device)
     object_boxes = torch.tensor(meta['object_boxes'], dtype=torch.float16, device=device)
 
-    # 计算 action_boxes
-    action_boxes = get_between_box(subject_boxes, object_boxes).cpu().numpy()  # Convert to CPU numpy for mask creation
+    action_boxes = get_between_box(subject_boxes, object_boxes).cpu().numpy()
 
-    # 创建 masks
     subject_masks, _ = create_guidance_masks(subject_boxes.cpu().numpy(), height, width)
     object_masks, _ = create_guidance_masks(object_boxes.cpu().numpy(), height, width)
-    action_masks, _ = create_guidance_masks(action_boxes, height, width)  # Use action_boxes for mask creation
+    action_masks, _ = create_guidance_masks(action_boxes, height, width)
 
-    # Combine subject, object, and action masks
     if not (subject_masks or object_masks or action_masks):
-        default_shape = (8, height, width)  # 这里的8是示例，需要根据你的情况来设置
+        default_shape = (8, height, width)
         default_mask = np.ones(default_shape, dtype=np.float32)
         subject_masks = [default_mask]
         object_masks = [default_mask]
@@ -352,14 +325,11 @@ def prepare_masks(meta, height, width, device):
     object_masks = np.concatenate(object_masks, axis=0)
     action_masks = np.concatenate(action_masks, axis=0)
 
-    all_subject_masks.append(subject_masks[None, ...])  # Add batch dimension
-    all_object_masks.append(object_masks[None, ...])  # Add batch dimension
-    all_action_masks.append(action_masks[None, ...])  # Add batch dimension
-
-    # Update max_masks to ensure all guidance_masks have the same number of masks
+    all_subject_masks.append(subject_masks[None, ...])
+    all_object_masks.append(object_masks[None, ...])
+    all_action_masks.append(action_masks[None, ...])
     max_masks = max(max_masks, subject_masks.shape[0], object_masks.shape[0], action_masks.shape[0])
 
-    # Pad all masks to have the same number of masks
     def pad_masks(masks_list, max_masks):
         padded_masks = []
         for masks in masks_list:
@@ -373,12 +343,10 @@ def prepare_masks(meta, height, width, device):
     padded_object_masks = pad_masks(all_object_masks, max_masks)
     padded_action_masks = pad_masks(all_action_masks, max_masks)
 
-    # Concatenate all masks for the batch
     all_subject_masks = np.concatenate(padded_subject_masks, axis=0)
     all_object_masks = np.concatenate(padded_object_masks, axis=0)
     all_action_masks = np.concatenate(padded_action_masks, axis=0)
 
-    # Convert to torch tensors
     all_subject_masks = torch.from_numpy(all_subject_masks).to(device).half()
     all_object_masks = torch.from_numpy(all_object_masks).to(device).half()
     all_action_masks = torch.from_numpy(all_action_masks).to(device).half()
@@ -399,17 +367,14 @@ def prepare_masks(meta, height, width, device):
     all_action_masks = pad_to_desired_size(all_action_masks, current_size_action, desired_size)
 
     # Resize masks
-    all_subject_masks = F.interpolate(all_subject_masks, (height // 4, width // 4), mode='bilinear')  # (batch, instance_num, H, W)
+    all_subject_masks = F.interpolate(all_subject_masks, (height // 4, width // 4), mode='bilinear')
     all_object_masks = F.interpolate(all_object_masks, (height // 4, width // 4), mode='bilinear')
     all_action_masks = F.interpolate(all_action_masks, (height // 4, width // 4), mode='bilinear')
 
-    all_subject_masks_8 = F.interpolate(all_subject_masks, (height // 8, width // 8), mode='bilinear')  # (batch, instance_num, H, W)
+    all_subject_masks_8 = F.interpolate(all_subject_masks, (height // 8, width // 8), mode='bilinear')
     all_object_masks_8 = F.interpolate(all_object_masks, (height // 8, width // 8), mode='bilinear')
     all_action_masks_8 = F.interpolate(all_action_masks, (height // 8, width // 8), mode='bilinear')
 
-    # all_subject_masks = (all_subject_masks > 0.1).half()
-    # all_object_masks = (all_object_masks > 0.1).half()
-    # all_action_masks = (all_action_masks > 0.1).half()
 
     return all_subject_masks, all_object_masks, all_action_masks, all_subject_masks_8, all_object_masks_8, all_action_masks_8
 
@@ -512,7 +477,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=10, help="")
     parser.add_argument("--no_plms", action='store_true', help="use DDIM instead. WARNING: I did not test the code yet")
     parser.add_argument("--guidance_scale", type=float, default=7.5, help="")
-    parser.add_argument("--seed", type=int, default=256)
+    parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--negative_prompt", type=str,
                         default='longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality',
                         help="")
@@ -525,7 +490,7 @@ if __name__ == "__main__":
     meta_list = [
 
         dict(
-            ckpt="/home/wwx/paper1/carefullll/interactdiffusion_cross/OUTPUT/test/checkpoint_00300001.pth",
+            ckpt="DDP-Diffusion.pth",
             prompt="a person is riding a horse",
             subject_phrases=['person'],
             object_phrases=['horse'],
@@ -535,18 +500,6 @@ if __name__ == "__main__":
             alpha_type=[0.8, 0.0, 0.2],
             save_folder_name="generation_hoi"
         ),
-        # dict(
-        #     ckpt="/home/wwx/paper1/carefullll/interactdiffusion_cross/OUTPUT/test/checkpoint_00300001.pth",
-        #     prompt="A person is leaning against a door.",
-        #     subject_phrases=['person'],
-        #     object_phrases=['door'],
-        #     action_phrases=['leaning against'],
-        #     subject_boxes=[[0.48, 0.2, 0.68, 0.7]],
-        #     object_boxes=[[0.7, 0.1, 0.25, 0.8]],
-        #     #object_boxes=[[0.2891, 0.0977, 0.6680, 0.4141]],
-        #     alpha_type=[0.8, 0.0, 0.2],
-        #     save_folder_name="generation_hoi"
-        # ),
     ]
 
     starting_noise = torch.randn(args.batch_size, 4, 64, 64).to(device)
@@ -557,3 +510,4 @@ if __name__ == "__main__":
         random.seed(args.seed)
 
         run(meta, args, starting_noise)
+
